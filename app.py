@@ -1,18 +1,19 @@
 from flask import Flask, request, jsonify
 from ai import ask
 from memory import load, save, get_user, store_event
-from personality import update_mood, personality_prompt
+from personality import update_mood, update_attachment, personality_prompt
 from router import detect_intent
 from voice import stt, tts
 from media import generate_image, analyze_video
 from autonomous import should_speak, generate_topic
 from learning import extract_preferences
+from awareness import track_event, get_recent_events
 
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Phos Ultra AI 💙"
+    return "Phos Ultra Conscious 💙"
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
@@ -20,13 +21,16 @@ def analyze():
 
     text = d.get("text", "")
     image = d.get("image")
-    file = d.get("file", "")
     audio = d.get("audio")
+    file = d.get("file", "")
     uid = d.get("user_id")
     name = d.get("username")
 
     mem = load()
     user = get_user(mem, uid, name)
+
+    # 👁️ تسجيل الحدث
+    track_event(mem, f"{name}: {text}")
 
     # 🎤 صوت → نص
     if audio:
@@ -36,7 +40,7 @@ def analyze():
     user["history"].append(text)
     user["history"] = user["history"][-15:]
 
-    # 🧬 Learning System
+    # 🧬 تعلم
     try:
         pref = extract_preferences(text)
         if "{" in pref:
@@ -44,74 +48,84 @@ def analyze():
     except:
         pass
 
-    # 🧠 Mood
+    # ❤️ تعلق
+    update_attachment(user, text)
+
+    # 🧠 مزاج
     update_mood(user, text)
 
-    # 🧠 Intent Detection
+    # 🧠 Intent
     intent = detect_intent(text, image, audio)
 
-    # 🎨 Image Generation
+    # 🎨 صورة
     if intent == "generate_image":
-        img = generate_image(text)
         return jsonify({
-            "result": f"🖼️ {img}",
+            "result": generate_image(text),
             "audio": None
         })
 
-    # 🎥 Video Analysis
+    # 🎥 فيديو
     if intent == "video":
         return jsonify({
             "result": analyze_video(text),
             "audio": None
         })
 
-    # 🤖 Autonomous AI (يبادر)
+    # 🤖 Autonomous
     if should_speak(user["history"]):
         topic = generate_topic()
+
         user["history"].append(topic)
         mem["users"][uid] = user
         save(mem)
 
-        audio_file = tts(topic)
-
         return jsonify({
             "result": topic,
-            "audio": audio_file
+            "audio": tts(topic)
         })
 
-    # 🧠 Personality Prompt
-    prompt = personality_prompt(user)
+    # 👁️ awareness context
+    events = get_recent_events(mem)
+
+    system_prompt = f"""
+{personality_prompt(user)}
+
+Recent Server Events:
+{events}
+
+You are aware of environment
+"""
 
     content = text
 
     if image:
         content += f"\nImage: {image}"
 
-    # 📄 File handling (chunking)
+    # 📄 file (chunking)
     if file:
         parts = [file[i:i+2000] for i in range(0, len(file), 2000)]
         responses = []
 
         for part in parts:
             responses.append(ask([
-                {"role": "system", "content": prompt},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": part}
             ]))
 
         final = "\n".join(responses)
     else:
         final = ask([
-            {"role": "system", "content": prompt},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": content}
         ])
 
-    # 💾 Save Memory
+    # 💾 حفظ
     user["history"].append(final)
     mem["users"][uid] = user
     store_event(mem, text)
     save(mem)
 
-    # 🎧 Voice Output
+    # 🎧 صوت
     audio_file = tts(final)
 
     return jsonify({
