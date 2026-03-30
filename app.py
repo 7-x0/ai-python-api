@@ -1,12 +1,12 @@
 from flask import Flask, request, jsonify
 from ai import ask
-from memory import load, save, get_user, store_event
+from memory import load, save, get_user, get_guild, get_global_user
 from personality import update_mood, update_attachment, update_jealousy, personality_prompt
 from router import detect_intent
 from voice import stt, tts
 from media import generate_image, analyze_video
 from autonomous import should_speak, generate_topic
-from learning import extract_preferences
+from learning import extract_memory
 from awareness import track_event, get_recent_events
 from social import update_relationships, get_relations
 from intervention import should_intervene
@@ -17,7 +17,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Phos Ultra AI 👑💙"
+    return "Phos Ultra AI 💙"
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
@@ -29,16 +29,23 @@ def analyze():
     file = data.get("file", "")
     user_id = data.get("user_id")
     username = data.get("username")
+    guild_id = data.get("guild_id", "default")
     is_owner = data.get("is_owner", False)
 
     memory = load()
-    user = get_user(memory, user_id, username)
 
-    # 👁️ تسجيل النشاط
+    # 🧠 guild memory
+    guild = get_guild(memory, guild_id)
+    user = get_user(guild, user_id, username)
+
+    # 👑 global memory (إلك)
+    global_user = get_global_user(memory, user_id)
+
+    # 👁️ activity
     update_activity(user_id)
 
-    # 👁️ تسجيل الحدث
-    track_event(memory, f"{username}: {text}")
+    # 👁️ events
+    track_event(guild, f"{username}: {text}")
 
     # 🎤 صوت → نص
     if audio:
@@ -48,50 +55,54 @@ def analyze():
     user["history"].append(text)
     user["history"] = user["history"][-15:]
 
-    # 🧬 Learning
+    # 🧠 AI memory (smart)
     try:
-        pref = extract_preferences(text)
-        if "{" in pref:
-            user["notes"].append(pref)
+        mem_item = extract_memory(text)
+
+        if mem_item:
+            if mem_item["type"] in ["fact", "interest"]:
+                user["notes"].append(mem_item["content"])
+
+            elif mem_item["type"] == "relation":
+                guild.setdefault("relations", []).append(mem_item["content"])
+
+            # 👑 يخزن الك important إلك بكل مكان
+            if is_owner:
+                global_user["notes"].append(mem_item["content"])
+
     except:
         pass
 
-    # ❤️ Personality updates
+    # ❤️ الشخصية
     update_attachment(user, text)
     update_jealousy(user, text)
     update_mood(user, text)
 
-    # 👥 العلاقات
-    update_relationships(memory, text)
+    # 👥 علاقات
+    update_relationships(guild, text)
 
-    # 🧠 Intent
+    # 🧠 intent
     intent = detect_intent(text, image, audio)
 
-    # 🎨 Image generation
+    # 🎨 صورة
     if intent == "generate_image":
-        return jsonify({
-            "result": generate_image(text),
-            "audio": None
-        })
+        return jsonify({"result": generate_image(text), "audio": None})
 
-    # 🎥 Video
+    # 🎥 فيديو
     if intent == "video":
-        return jsonify({
-            "result": analyze_video(text),
-            "audio": None
-        })
+        return jsonify({"result": analyze_video(text), "audio": None})
 
-    # 👑 Owner ping إذا مختفي
+    # 👑 نداء إذا اختفيت
     if str(user_id) == str(OWNER_ID) and should_ping(user_id):
         return jsonify({
             "result": "وينك؟ مختفي اليوم 😏",
             "audio": None
         })
 
-    # 👁️ تدخل بالمحادثة
+    # 👁️ تدخل
     if should_intervene(text):
-        events = get_recent_events(memory)
-        relations = get_relations(memory)
+        events = get_recent_events(guild)
+        relations = get_relations(guild)
 
         system_prompt = f"""
 {personality_prompt(user, user_id)}
@@ -102,7 +113,7 @@ Recent Events:
 Relationships:
 {relations}
 
-Join naturally
+Act natural
 """
 
         final = ask([
@@ -111,7 +122,8 @@ Join naturally
         ])
 
         user["history"].append(final)
-        memory["users"][user_id] = user
+        guild["users"][user_id] = user
+        memory["guilds"][guild_id] = guild
         save(memory)
 
         return jsonify({
@@ -119,12 +131,13 @@ Join naturally
             "audio": tts(final)
         })
 
-    # 🤖 Autonomous chat
+    # 🤖 auto chat
     if text == "auto_think" or should_speak(user["history"]):
         topic = generate_topic()
 
         user["history"].append(topic)
-        memory["users"][user_id] = user
+        guild["users"][user_id] = user
+        memory["guilds"][guild_id] = guild
         save(memory)
 
         return jsonify({
@@ -132,7 +145,7 @@ Join naturally
             "audio": tts(topic)
         })
 
-    # 🧠 Personality context
+    # 🧠 prompt
     system_prompt = personality_prompt(user, user_id)
 
     if is_owner:
@@ -142,7 +155,7 @@ Join naturally
     if image:
         content += f"\nImage: {image}"
 
-    # 📄 ملفات طويلة
+    # 📄 file
     if file:
         parts = [file[i:i+2000] for i in range(0, len(file), 2000)]
         responses = []
@@ -160,10 +173,10 @@ Join naturally
             {"role": "user", "content": content}
         ])
 
-    # 💾 حفظ
+    # 💾 save
     user["history"].append(final)
-    memory["users"][user_id] = user
-    store_event(memory, text)
+    guild["users"][user_id] = user
+    memory["guilds"][guild_id] = guild
     save(memory)
 
     # 🎧 صوت
