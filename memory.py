@@ -4,11 +4,15 @@ FILE = "memory.json"
 
 def load():
     if not os.path.exists(FILE):
-        return {"users": {}, "global": {"facts": []}}
+        return {
+            "users": {},
+            "relations": [],
+            "events": []
+        }
     return json.load(open(FILE))
 
 def save(mem):
-    json.dump(mem, open(FILE, "w"), indent=2)
+    json.dump(mem, open(FILE,"w"), indent=2)
 
 def get_user(mem, uid, name):
     return mem["users"].get(uid, {
@@ -17,3 +21,6 @@ def get_user(mem, uid, name):
         "history": [],
         "mood": "neutral"
     })
+
+def store_event(mem, text):
+    mem["events"].append(text)
