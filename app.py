@@ -1,17 +1,29 @@
 from flask import Flask, request, jsonify
 import requests
+import json
+import os
 
 app = Flask(__name__)
 
 API_KEY = "حط_مفتاح_OpenAI_هنا"
 
-# 🔹 تقسيم النصوص الطويلة
-def split_text(text, size=2000):
-    return [text[i:i+size] for i in range(0, len(text), size)]
+MEMORY_FILE = "memory.json"
 
-# 🔹 طلب لـ OpenAI
+# 🔹 تحميل الذاكرة
+def load_memory():
+    if not os.path.exists(MEMORY_FILE):
+        return {"users": {}, "global": {"notes": []}}
+    with open(MEMORY_FILE, "r") as f:
+        return json.load(f)
+
+# 🔹 حفظ الذاكرة
+def save_memory(mem):
+    with open(MEMORY_FILE, "w") as f:
+        json.dump(mem, f, indent=2)
+
+# 🔹 GPT request
 def ask_gpt(messages):
-    response = requests.post(
+    res = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers={
             "Authorization": f"Bearer {API_KEY}",
@@ -24,16 +36,18 @@ def ask_gpt(messages):
     )
 
     try:
-        return response.json()["choices"][0]["message"]["content"]
+        return res.json()["choices"][0]["message"]["content"]
     except:
         return "صار خطأ ❌"
 
-# 🏠 الصفحة الرئيسية
+# 🔹 تقسيم النص
+def split_text(text, size=2000):
+    return [text[i:i+size] for i in range(0, len(text), size)]
+
 @app.route("/")
 def home():
     return "Phos شغال 💙"
 
-# 🧠 التحليل الرئيسي
 @app.route("/analyze", methods=["POST"])
 def analyze():
     data = request.json
@@ -41,74 +55,130 @@ def analyze():
     text = data.get("text", "")
     image = data.get("image", None)
     file = data.get("file", "")
+    user_id = data.get("user_id", "unknown")
+    username = data.get("username", "unknown")
 
-    # 🧠 1️⃣ Intent Detection
-    intent_prompt = [
+    memory = load_memory()
+
+    # 👤 ذاكرة المستخدم
+    user_memory = memory["users"].get(user_id, {
+        "name": username,
+        "notes": []
+    })
+
+    # 👥 ذاكرة مشتركة
+    global_memory = memory["global"].get("notes", [])
+
+    # 🧠 Intent Detection
+    intent_raw = ask_gpt([
         {
             "role": "system",
             "content": """
-Classify the request into one of:
-chat, code, image_analysis
+Classify the request into:
+chat, code, image
 
-Return ONLY JSON like:
-{ "type": "chat" }
+Return only one word.
 """
         },
         {
             "role": "user",
-            "content": f"{text}\nImage: {image}\nFile: {file[:500]}"
+            "content": f"{text}\nImage: {image}"
         }
-    ]
+    ])
 
-    intent_raw = ask_gpt(intent_prompt)
-
-    if "code" in intent_raw:
+    if "code" in intent_raw.lower():
         intent = "code"
-    elif "image" in intent_raw:
+    elif "image" in intent_raw.lower():
         intent = "image"
     else:
         intent = "chat"
 
-    # 🧠 2️⃣ اختيار الشخصية
-    if intent == "code":
-        system_prompt = """
-You are a senior software engineer.
+    # 🧠 استخراج ذاكرة جديدة
+    memory_extract = ask_gpt([
+        {
+            "role": "system",
+            "content": """
+Extract important memory.
 
-- Find ALL bugs
+Return JSON:
+{ "save": true/false, "type": "user/global", "data": "..." }
+"""
+        },
+        {
+            "role": "user",
+            "content": text
+        }
+    ])
+
+    if "true" in memory_extract.lower():
+        if "global" in memory_extract.lower():
+            global_memory.append(text)
+            memory["global"]["notes"] = global_memory
+        else:
+            user_memory["notes"].append(text)
+
+    # 💾 حفظ
+    memory["users"][user_id] = user_memory
+    save_memory(memory)
+
+    # 🧠 تجهيز الذاكرة
+    user_context = "\n".join(user_memory["notes"][-5:])
+    global_context = "\n".join(global_memory[-5:])
+
+    # 🧠 اختيار النظام
+    if intent == "code":
+        system_prompt = f"""
+You are Phos, a senior software engineer.
+
+User Memory:
+{user_context}
+
+Global Memory:
+{global_context}
+
 - Fix code
-- Improve performance
-- Return clean code
-- Explain briefly in Arabic
+- Find bugs
+- Be precise
+- Explain in Arabic
 """
     elif intent == "image":
-        system_prompt = """
-You are Phosphophyllite (Phos).
+        system_prompt = f"""
+You are Phos.
 
-- Analyze images deeply
-- Describe clearly
-- Help user based on image
+User Memory:
+{user_context}
+
+Global Memory:
+{global_context}
+
+- Analyze images
+- Be smart
 - Speak Arabic
 """
     else:
-        system_prompt = """
+        system_prompt = f"""
 You are Phosphophyllite (Phos).
 
-- Speak Arabic by default
-- Understand Arabic and English
-- Be friendly and smart
-- Help clearly and accurately
+User Memory:
+{user_context}
+
+Global Memory:
+{global_context}
+
+- Speak Arabic
+- Understand English
+- Be friendly
+- Be smart
 """
 
-    # 🧠 3️⃣ تجهيز المحتوى
-    user_content = text
-
+    # 🧠 تجهيز المحتوى
+    content = text
     if image:
-        user_content += f"\n\nImage URL: {image}"
+        content += f"\nImage: {image}"
 
-    # 🧠 4️⃣ إذا أكو ملف طويل → تقسيم
+    # 📄 إذا ملف طويل
     if file:
         chunks = split_text(file)
-
         results = []
 
         for chunk in chunks:
@@ -118,17 +188,13 @@ You are Phosphophyllite (Phos).
             ])
             results.append(res)
 
-        final_result = "\n".join(results)
-
+        final = "\n".join(results)
     else:
-        final_result = ask_gpt([
+        final = ask_gpt([
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content}
+            {"role": "user", "content": content}
         ])
 
-    return jsonify({
-        "result": final_result
-    })
+    return jsonify({"result": final})
 
-# 🚀 تشغيل السيرفر
 app.run(host="0.0.0.0", port=3000)
