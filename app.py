@@ -66,7 +66,7 @@ def ask_gpt(messages):
     except:
         return "صار خطأ ❌"
 
-# ================= STT (Voice → Text) =================
+# ================= STT =================
 
 def speech_to_text(audio_url):
     try:
@@ -87,7 +87,7 @@ def speech_to_text(audio_url):
     except:
         return ""
 
-# ================= TTS (Text → Voice) =================
+# ================= TTS =================
 
 def text_to_speech(text):
     res = requests.post(
@@ -98,7 +98,7 @@ def text_to_speech(text):
         },
         json={
             "model": "gpt-4o-mini-tts",
-            "voice": "nova",  # 👈 صوت بنت
+            "voice": "nova",
             "input": text
         }
     )
@@ -119,7 +119,7 @@ def split_text(text, size=2000):
 
 @app.route("/")
 def home():
-    return "Phos Ultra Voice 💙"
+    return "Phos Ultra 💙"
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
@@ -128,7 +128,7 @@ def analyze():
     text = data.get("text", "")
     image = data.get("image")
     file = data.get("file", "")
-    audio = data.get("audio")  # 👈 صوت
+    audio = data.get("audio")
     user_id = data.get("user_id")
     username = data.get("username")
 
@@ -137,12 +137,13 @@ def analyze():
     user = memory["users"].get(user_id, {
         "name": username,
         "notes": [],
-        "history": []
+        "history": [],
+        "mood": "neutral"
     })
 
     global_mem = memory["global"]
 
-    # 🎤 إذا صوت → نحوله نص
+    # 🎤 صوت → نص
     if audio:
         text = speech_to_text(audio)
 
@@ -150,11 +151,34 @@ def analyze():
     user["history"].append(f"user: {text}")
     user["history"] = user["history"][-10:]
 
+    # 🧠 mood detection
+    mood_res = ask_gpt([
+        {"role": "system", "content": "detect mood: happy, neutral, bored, annoyed"},
+        {"role": "user", "content": text}
+    ])
+
+    if "happy" in mood_res:
+        user["mood"] = "happy"
+    elif "bored" in mood_res:
+        user["mood"] = "bored"
+    elif "annoyed" in mood_res:
+        user["mood"] = "annoyed"
+    else:
+        user["mood"] = "neutral"
+
     # 🧠 context
     context = f"""
+You are Phosphophyllite (Phos)
+
+Mood: {user["mood"]}
+
 User Memory: {user["notes"][-5:]}
 Global Memory: {global_mem["facts"][-5:]}
-History: {user["history"]}
+Conversation: {user["history"]}
+
+- Speak Arabic
+- Be natural
+- Be human-like
 """
 
     # 🖼️ صورة
@@ -178,7 +202,7 @@ History: {user["history"]}
             {"role": "user", "content": content}
         ])
 
-    # 💬 حفظ
+    # 💬 save
     user["history"].append(f"phos: {final}")
     memory["users"][user_id] = user
     save_memory(memory)
