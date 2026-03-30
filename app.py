@@ -17,7 +17,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Phos Ultra Social AI 💙"
+    return "Phos Ultra AI 👑💙"
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
@@ -29,6 +29,7 @@ def analyze():
     file = data.get("file", "")
     user_id = data.get("user_id")
     username = data.get("username")
+    is_owner = data.get("is_owner", False)
 
     memory = load()
     user = get_user(memory, user_id, username)
@@ -47,7 +48,7 @@ def analyze():
     user["history"].append(text)
     user["history"] = user["history"][-15:]
 
-    # 🧬 تعلم
+    # 🧬 Learning
     try:
         pref = extract_preferences(text)
         if "{" in pref:
@@ -55,7 +56,7 @@ def analyze():
     except:
         pass
 
-    # ❤️ تحديثات الشخصية
+    # ❤️ Personality updates
     update_attachment(user, text)
     update_jealousy(user, text)
     update_mood(user, text)
@@ -63,27 +64,27 @@ def analyze():
     # 👥 العلاقات
     update_relationships(memory, text)
 
-    # 🧠 intent
+    # 🧠 Intent
     intent = detect_intent(text, image, audio)
 
-    # 🎨 توليد صورة
+    # 🎨 Image generation
     if intent == "generate_image":
         return jsonify({
             "result": generate_image(text),
             "audio": None
         })
 
-    # 🎥 فيديو
+    # 🎥 Video
     if intent == "video":
         return jsonify({
             "result": analyze_video(text),
             "audio": None
         })
 
-    # ❤️ نداء المالك إذا مختفي
+    # 👑 Owner ping إذا مختفي
     if str(user_id) == str(OWNER_ID) and should_ping(user_id):
         return jsonify({
-            "result": "وينك؟ صارلك فترة مختفي 😏",
+            "result": "وينك؟ مختفي اليوم 😏",
             "audio": None
         })
 
@@ -101,7 +102,7 @@ Recent Events:
 Relationships:
 {relations}
 
-Join the conversation naturally
+Join naturally
 """
 
         final = ask([
@@ -118,8 +119,8 @@ Join the conversation naturally
             "audio": tts(final)
         })
 
-    # 🤖 يسولف من نفسه
-    if should_speak(user["history"]):
+    # 🤖 Autonomous chat
+    if text == "auto_think" or should_speak(user["history"]):
         topic = generate_topic()
 
         user["history"].append(topic)
@@ -131,14 +132,17 @@ Join the conversation naturally
             "audio": tts(topic)
         })
 
-    # 🧠 السياق
+    # 🧠 Personality context
     system_prompt = personality_prompt(user, user_id)
+
+    if is_owner:
+        system_prompt += "\nYou treat this user as very special."
 
     content = text
     if image:
         content += f"\nImage: {image}"
 
-    # 📄 ملف طويل
+    # 📄 ملفات طويلة
     if file:
         parts = [file[i:i+2000] for i in range(0, len(file), 2000)]
         responses = []
