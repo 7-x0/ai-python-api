@@ -5,9 +5,10 @@ app = Flask(__name__)
 
 API_KEY = "حط_مفتاح_OpenAI_هنا"
 MEMORY_FILE = "memory.json"
+
 CACHE = {}
 
-# -------------------- MEMORY --------------------
+# ================= MEMORY =================
 
 def load_memory():
     if not os.path.exists(MEMORY_FILE):
@@ -15,7 +16,6 @@ def load_memory():
             "users": {},
             "global": {
                 "notes": [],
-                "nicknames": {},
                 "facts": []
             }
         }
@@ -26,23 +26,23 @@ def save_memory(mem):
     with open(MEMORY_FILE, "w") as f:
         json.dump(mem, f, indent=2)
 
-# -------------------- CACHE --------------------
+# ================= CACHE =================
 
-def get_cache_key(text):
-    return hashlib.md5(text.encode()).hexdigest()
+def cache_key(data):
+    return hashlib.md5(str(data).encode()).hexdigest()
 
 def cache_get(key):
     if key in CACHE and time.time() - CACHE[key]["time"] < 60:
-        return CACHE[key]["value"]
+        return CACHE[key]["val"]
     return None
 
-def cache_set(key, value):
-    CACHE[key] = {"value": value, "time": time.time()}
+def cache_set(key, val):
+    CACHE[key] = {"val": val, "time": time.time()}
 
-# -------------------- GPT --------------------
+# ================= GPT =================
 
 def ask_gpt(messages):
-    key = get_cache_key(str(messages))
+    key = cache_key(messages)
     cached = cache_get(key)
     if cached:
         return cached
@@ -66,36 +66,60 @@ def ask_gpt(messages):
     except:
         return "صار خطأ ❌"
 
-# -------------------- IMAGE GEN --------------------
+# ================= STT (Voice → Text) =================
 
-def generate_image(prompt):
+def speech_to_text(audio_url):
+    try:
+        audio = requests.get(audio_url).content
+
+        res = requests.post(
+            "https://api.openai.com/v1/audio/transcriptions",
+            headers={
+                "Authorization": f"Bearer {API_KEY}"
+            },
+            files={
+                "file": ("voice.ogg", audio),
+                "model": (None, "gpt-4o-mini-transcribe")
+            }
+        )
+
+        return res.json().get("text", "")
+    except:
+        return ""
+
+# ================= TTS (Text → Voice) =================
+
+def text_to_speech(text):
     res = requests.post(
-        "https://api.openai.com/v1/images/generations",
+        "https://api.openai.com/v1/audio/speech",
         headers={
             "Authorization": f"Bearer {API_KEY}",
             "Content-Type": "application/json"
         },
         json={
-            "model": "gpt-image-1",
-            "prompt": prompt,
-            "size": "1024x1024"
+            "model": "gpt-4o-mini-tts",
+            "voice": "nova",  # 👈 صوت بنت
+            "input": text
         }
     )
-    try:
-        return res.json()["data"][0]["url"]
-    except:
-        return None
 
-# -------------------- SPLIT --------------------
+    if res.status_code == 200:
+        filename = "voice.mp3"
+        with open(filename, "wb") as f:
+            f.write(res.content)
+        return filename
+    return None
+
+# ================= SPLIT =================
 
 def split_text(text, size=2000):
     return [text[i:i+size] for i in range(0, len(text), size)]
 
-# -------------------- MAIN --------------------
+# ================= MAIN =================
 
 @app.route("/")
 def home():
-    return "Phos Ultra Memory 💙"
+    return "Phos Ultra Voice 💙"
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
@@ -104,7 +128,7 @@ def analyze():
     text = data.get("text", "")
     image = data.get("image")
     file = data.get("file", "")
-    video = data.get("video", None)
+    audio = data.get("audio")  # 👈 صوت
     user_id = data.get("user_id")
     username = data.get("username")
 
@@ -113,89 +137,32 @@ def analyze():
     user = memory["users"].get(user_id, {
         "name": username,
         "notes": [],
-        "history": [],
-        "nicknames": {}
+        "history": []
     })
 
     global_mem = memory["global"]
 
-    # 💬 conversation
+    # 🎤 إذا صوت → نحوله نص
+    if audio:
+        text = speech_to_text(audio)
+
+    # 💬 history
     user["history"].append(f"user: {text}")
     user["history"] = user["history"][-10:]
 
-    # 🧠 intent
-    intent = ask_gpt([
-        {"role": "system", "content": "classify: chat, code, image, generate_image, video"},
-        {"role": "user", "content": text}
-    ])
-
-    # 🎨 generate image
-    if "generate_image" in intent:
-        img = generate_image(text)
-        return jsonify({"result": f"🖼️ {img}"})
-
-    # 🎥 video
-    if video:
-        return jsonify({"result": f"🎥 هذا فيديو: {video} (تحليل مبدئي)"})
-
-    # 🧠 extract structured memory
-    extract = ask_gpt([
-        {
-            "role": "system",
-            "content": """
-Extract structured memory.
-
-Return JSON:
-{
- "nickname": "...",
- "fact": "...",
- "global": true/false
-}
-"""
-        },
-        {"role": "user", "content": text}
-    ])
-
-    try:
-        data_mem = json.loads(extract)
-        if data_mem.get("nickname"):
-            user["nicknames"][username] = data_mem["nickname"]
-
-        if data_mem.get("fact"):
-            if data_mem.get("global"):
-                global_mem["facts"].append(data_mem["fact"])
-            else:
-                user["notes"].append(data_mem["fact"])
-    except:
-        pass
-
-    # 🔎 search memory
-    if "شنو قال" in text or "who said" in text:
-        all_memory = json.dumps(memory)
-        answer = ask_gpt([
-            {"role": "system", "content": "search memory and answer"},
-            {"role": "user", "content": f"{text}\nMemory:\n{all_memory}"}
-        ])
-        return jsonify({"result": answer})
-
     # 🧠 context
     context = f"""
-User Memory:
-{user["notes"][-5:]}
-
-Global:
-{global_mem["facts"][-5:]}
-
-History:
-{user["history"]}
+User Memory: {user["notes"][-5:]}
+Global Memory: {global_mem["facts"][-5:]}
+History: {user["history"]}
 """
 
-    # 🖼️ image
+    # 🖼️ صورة
     content = text
     if image:
         content += f"\nImage: {image}"
 
-    # 📄 file
+    # 📄 ملف
     if file:
         chunks = split_text(file)
         results = []
@@ -211,11 +178,17 @@ History:
             {"role": "user", "content": content}
         ])
 
+    # 💬 حفظ
     user["history"].append(f"phos: {final}")
-
     memory["users"][user_id] = user
     save_memory(memory)
 
-    return jsonify({"result": final})
+    # 🎧 صوت
+    audio_file = text_to_speech(final)
+
+    return jsonify({
+        "result": final,
+        "audio": audio_file
+    })
 
 app.run(host="0.0.0.0", port=3000)
