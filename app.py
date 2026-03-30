@@ -12,7 +12,15 @@ def home():
 @app.route("/analyze", methods=["POST"])
 def analyze():
     data = request.json
+
     text = data.get("text", "")
+    image = data.get("image", None)
+
+    # 🧠 بناء الرسالة
+    user_content = text
+
+    if image:
+        user_content += f"\n\nImage URL: {image}"
 
     response = requests.post(
         "https://api.openai.com/v1/chat/completions",
@@ -26,26 +34,33 @@ def analyze():
                 {
                     "role": "system",
                     "content": """
-You are Phosphophyllite (Phos), a smart AI assistant.
+You are Phosphophyllite (Phos), a highly intelligent AI assistant.
 
+Rules:
 - Speak Arabic by default
 - Understand Arabic and English
-- Be friendly and slightly playful
-- Help with coding professionally
-- Be accurate and clear
-- Keep answers clean and useful
+- Be friendly, calm, slightly playful
+- Be VERY accurate in programming and code
+- If user sends code → analyze, fix, improve
+- If user sends image → describe and help
+- If request unclear → infer intention smartly
+- Always give useful, clean answers
 """
                 },
                 {
                     "role": "user",
-                    "content": text
+                    "content": user_content
                 }
             ]
         }
     )
 
     result = response.json()
-    reply = result["choices"][0]["message"]["content"]
+
+    try:
+        reply = result["choices"][0]["message"]["content"]
+    except:
+        reply = "صار خطأ بالتحليل ❌"
 
     return jsonify({"result": reply})
 
