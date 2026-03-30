@@ -4,5 +4,6 @@ def track_event(mem, event):
 
     mem["events"].append(event)
 
+
 def get_recent_events(mem):
     return mem.get("events", [])[-10:]
