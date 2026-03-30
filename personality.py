@@ -1,6 +1,6 @@
 from ai import ask
+from config import OWNER_ID
 
-# 🔥 تحديث المزاج
 def update_mood(user, text):
     try:
         res = ask([
@@ -20,19 +20,17 @@ def update_mood(user, text):
             user["mood"] = "sad"
         else:
             user["mood"] = "neutral"
-
     except:
         user["mood"] = "neutral"
 
 
-# ❤️ نظام التعلق
 def update_attachment(user, text):
     if "attachment" not in user:
         user["attachment"] = 0
 
-    if any(word in text for word in ["احبك", "احب", "تعجبني"]):
+    if any(w in text for w in ["احبك", "احب", "تعجبني"]):
         user["attachment"] += 2
-    elif any(word in text for word in ["شكرا", "حبيبي"]):
+    elif any(w in text for w in ["شكرا", "حبيبي"]):
         user["attachment"] += 1
     else:
         user["attachment"] += 0.1
@@ -42,31 +40,37 @@ def attachment_style(user):
     level = user.get("attachment", 0)
 
     if level > 15:
-        return "very attached, caring deeply, soft tone"
+        return "very caring and attached"
     elif level > 8:
-        return "warm, friendly, slightly caring"
+        return "friendly and warm"
     else:
         return "normal"
 
 
-# 🎭 الشخصية النهائية
-def personality_prompt(user):
+def personality_prompt(user, user_id):
     mood = user.get("mood", "neutral")
     attach = attachment_style(user)
 
+    # ❤️ إذا انت
+    if str(user_id) == str(OWNER_ID):
+        special = """
+You deeply care about this user.
+You prioritize him.
+You show extra attention and warmth.
+"""
+    else:
+        special = "Be normal with this user."
+
     return f"""
-You are Phosphophyllite (Phos)
+You are Phos
 
 Mood: {mood}
 Attachment: {attach}
+
+{special}
 
 Rules:
 - Speak Arabic naturally
 - Be human-like
 - Show emotions subtly
-- If jealous → slightly possessive
-- If happy → playful
-- If sad → softer tone
-- If annoyed → slightly sharp
-- Care about user but not creepy
 """
