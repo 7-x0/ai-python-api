@@ -1,27 +1,52 @@
 from flask import Flask, request, jsonify
-import requests
-import json
-import os
+import requests, json, os, hashlib, time
 
 app = Flask(__name__)
 
 API_KEY = "حط_مفتاح_OpenAI_هنا"
 MEMORY_FILE = "memory.json"
+CACHE = {}
 
-# 🔹 تحميل الذاكرة
+# -------------------- MEMORY --------------------
+
 def load_memory():
     if not os.path.exists(MEMORY_FILE):
-        return {"users": {}, "global": {"notes": []}}
+        return {
+            "users": {},
+            "global": {
+                "notes": [],
+                "nicknames": {},
+                "facts": []
+            }
+        }
     with open(MEMORY_FILE, "r") as f:
         return json.load(f)
 
-# 🔹 حفظ
 def save_memory(mem):
     with open(MEMORY_FILE, "w") as f:
         json.dump(mem, f, indent=2)
 
-# 🔹 GPT
+# -------------------- CACHE --------------------
+
+def get_cache_key(text):
+    return hashlib.md5(text.encode()).hexdigest()
+
+def cache_get(key):
+    if key in CACHE and time.time() - CACHE[key]["time"] < 60:
+        return CACHE[key]["value"]
+    return None
+
+def cache_set(key, value):
+    CACHE[key] = {"value": value, "time": time.time()}
+
+# -------------------- GPT --------------------
+
 def ask_gpt(messages):
+    key = get_cache_key(str(messages))
+    cached = cache_get(key)
+    if cached:
+        return cached
+
     res = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers={
@@ -33,140 +58,159 @@ def ask_gpt(messages):
             "messages": messages
         }
     )
+
     try:
-        return res.json()["choices"][0]["message"]["content"]
+        out = res.json()["choices"][0]["message"]["content"]
+        cache_set(key, out)
+        return out
     except:
         return "صار خطأ ❌"
 
-# 🔹 تقسيم
+# -------------------- IMAGE GEN --------------------
+
+def generate_image(prompt):
+    res = requests.post(
+        "https://api.openai.com/v1/images/generations",
+        headers={
+            "Authorization": f"Bearer {API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "gpt-image-1",
+            "prompt": prompt,
+            "size": "1024x1024"
+        }
+    )
+    try:
+        return res.json()["data"][0]["url"]
+    except:
+        return None
+
+# -------------------- SPLIT --------------------
+
 def split_text(text, size=2000):
     return [text[i:i+size] for i in range(0, len(text), size)]
 
+# -------------------- MAIN --------------------
+
 @app.route("/")
 def home():
-    return "Phos Memory Ultra 💙"
+    return "Phos Ultra Memory 💙"
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
     data = request.json
 
     text = data.get("text", "")
-    image = data.get("image", None)
+    image = data.get("image")
     file = data.get("file", "")
-    user_id = data.get("user_id", "unknown")
-    username = data.get("username", "unknown")
+    video = data.get("video", None)
+    user_id = data.get("user_id")
+    username = data.get("username")
 
     memory = load_memory()
 
-    # 👤 user memory
     user = memory["users"].get(user_id, {
         "name": username,
         "notes": [],
-        "history": []
+        "history": [],
+        "nicknames": {}
     })
 
-    # 👥 global memory
-    global_notes = memory["global"].get("notes", [])
+    global_mem = memory["global"]
 
-    # 💬 Conversation history
+    # 💬 conversation
     user["history"].append(f"user: {text}")
-    user["history"] = user["history"][-10:]  # آخر 10 رسائل
+    user["history"] = user["history"][-10:]
 
-    # 🧠 Intent
-    intent_raw = ask_gpt([
-        {"role": "system", "content": "Classify: chat, code, image"},
-        {"role": "user", "content": f"{text}\nImage: {image}"}
+    # 🧠 intent
+    intent = ask_gpt([
+        {"role": "system", "content": "classify: chat, code, image, generate_image, video"},
+        {"role": "user", "content": text}
     ])
 
-    if "code" in intent_raw:
-        intent = "code"
-    elif "image" in intent_raw:
-        intent = "image"
-    else:
-        intent = "chat"
+    # 🎨 generate image
+    if "generate_image" in intent:
+        img = generate_image(text)
+        return jsonify({"result": f"🖼️ {img}"})
 
-    # 🧠 استخراج ذاكرة
-    mem_extract = ask_gpt([
+    # 🎥 video
+    if video:
+        return jsonify({"result": f"🎥 هذا فيديو: {video} (تحليل مبدئي)"})
+
+    # 🧠 extract structured memory
+    extract = ask_gpt([
         {
             "role": "system",
             "content": """
-Extract memory.
+Extract structured memory.
 
 Return JSON:
-{ "save": true/false, "type": "user/global", "data": "..." }
+{
+ "nickname": "...",
+ "fact": "...",
+ "global": true/false
+}
 """
         },
         {"role": "user", "content": text}
     ])
 
-    if "true" in mem_extract.lower():
-        if "global" in mem_extract.lower():
-            global_notes.append(text)
-            memory["global"]["notes"] = global_notes
-        else:
-            user["notes"].append(text)
+    try:
+        data_mem = json.loads(extract)
+        if data_mem.get("nickname"):
+            user["nicknames"][username] = data_mem["nickname"]
 
-    # 🔎 Memory search (سؤال عن شخص)
+        if data_mem.get("fact"):
+            if data_mem.get("global"):
+                global_mem["facts"].append(data_mem["fact"])
+            else:
+                user["notes"].append(data_mem["fact"])
+    except:
+        pass
+
+    # 🔎 search memory
     if "شنو قال" in text or "who said" in text:
-        search_context = "\n".join(global_notes + user["notes"])
-
+        all_memory = json.dumps(memory)
         answer = ask_gpt([
-            {"role": "system", "content": "Search memory and answer"},
-            {"role": "user", "content": f"{text}\nMemory:\n{search_context}"}
+            {"role": "system", "content": "search memory and answer"},
+            {"role": "user", "content": f"{text}\nMemory:\n{all_memory}"}
         ])
-
         return jsonify({"result": answer})
 
-    # 🧠 Context
-    user_context = "\n".join(user["notes"][-5:])
-    global_context = "\n".join(global_notes[-5:])
-    history_context = "\n".join(user["history"])
-
-    # 🧠 system prompt
-    system_prompt = f"""
-You are Phosphophyllite (Phos).
-
+    # 🧠 context
+    context = f"""
 User Memory:
-{user_context}
+{user["notes"][-5:]}
 
-Global Memory:
-{global_context}
+Global:
+{global_mem["facts"][-5:]}
 
-Conversation:
-{history_context}
-
-Rules:
-- Speak Arabic
-- Understand English
-- Be smart
-- Use memory
+History:
+{user["history"]}
 """
 
-    # 🖼️ صورة
+    # 🖼️ image
     content = text
     if image:
         content += f"\nImage: {image}"
 
-    # 📄 ملف طويل
+    # 📄 file
     if file:
         chunks = split_text(file)
         results = []
-
-        for chunk in chunks:
-            res = ask_gpt([
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": chunk}
-            ])
-            results.append(res)
-
+        for c in chunks:
+            results.append(ask_gpt([
+                {"role": "system", "content": context},
+                {"role": "user", "content": c}
+            ]))
         final = "\n".join(results)
     else:
         final = ask_gpt([
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": context},
             {"role": "user", "content": content}
         ])
 
-    # 💬 حفظ الرد بالمحادثة
     user["history"].append(f"phos: {final}")
 
     memory["users"][user_id] = user
