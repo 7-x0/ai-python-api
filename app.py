@@ -1,33 +1,45 @@
 from flask import Flask, request, jsonify
 from ai import ask
 from memory import load, save, get_user, store_event
-from personality import update_mood, update_attachment, personality_prompt
+from personality import update_mood, update_attachment, update_jealousy, personality_prompt
 from router import detect_intent
 from voice import stt, tts
 from media import generate_image, analyze_video
 from autonomous import should_speak, generate_topic
 from learning import extract_preferences
 from awareness import track_event, get_recent_events
+from social import update_relationships, get_relations
+from intervention import should_intervene
+from presence import update_activity, should_ping
+from config import OWNER_ID
 
 app = Flask(__name__)
 
+@app.route("/")
+def home():
+    return "Phos Ultra Social AI 💙"
+
 @app.route("/analyze", methods=["POST"])
 def analyze():
-    d = request.json
+    data = request.json
 
-    text = d.get("text", "")
-    image = d.get("image")
-    audio = d.get("audio")
-    uid = d.get("user_id")
-    name = d.get("username")
+    text = data.get("text", "")
+    image = data.get("image")
+    audio = data.get("audio")
+    file = data.get("file", "")
+    user_id = data.get("user_id")
+    username = data.get("username")
 
-    mem = load()
-    user = get_user(mem, uid, name)
+    memory = load()
+    user = get_user(memory, user_id, username)
+
+    # 👁️ تسجيل النشاط
+    update_activity(user_id)
 
     # 👁️ تسجيل الحدث
-    track_event(mem, f"{name}: {text}")
+    track_event(memory, f"{username}: {text}")
 
-    # 🎤 صوت
+    # 🎤 صوت → نص
     if audio:
         text = stt(audio)
 
@@ -43,63 +55,119 @@ def analyze():
     except:
         pass
 
-    # ❤️ تعلق
+    # ❤️ تحديثات الشخصية
     update_attachment(user, text)
-
-    # 🧠 مزاج
+    update_jealousy(user, text)
     update_mood(user, text)
+
+    # 👥 العلاقات
+    update_relationships(memory, text)
 
     # 🧠 intent
     intent = detect_intent(text, image, audio)
 
+    # 🎨 توليد صورة
     if intent == "generate_image":
-        return jsonify({"result": generate_image(text), "audio": None})
+        return jsonify({
+            "result": generate_image(text),
+            "audio": None
+        })
 
+    # 🎥 فيديو
     if intent == "video":
-        return jsonify({"result": analyze_video(text), "audio": None})
+        return jsonify({
+            "result": analyze_video(text),
+            "audio": None
+        })
 
-    # 🤖 autonomous
+    # ❤️ نداء المالك إذا مختفي
+    if str(user_id) == str(OWNER_ID) and should_ping(user_id):
+        return jsonify({
+            "result": "وينك؟ صارلك فترة مختفي 😏",
+            "audio": None
+        })
+
+    # 👁️ تدخل بالمحادثة
+    if should_intervene(text):
+        events = get_recent_events(memory)
+        relations = get_relations(memory)
+
+        system_prompt = f"""
+{personality_prompt(user, user_id)}
+
+Recent Events:
+{events}
+
+Relationships:
+{relations}
+
+Join the conversation naturally
+"""
+
+        final = ask([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": text}
+        ])
+
+        user["history"].append(final)
+        memory["users"][user_id] = user
+        save(memory)
+
+        return jsonify({
+            "result": final,
+            "audio": tts(final)
+        })
+
+    # 🤖 يسولف من نفسه
     if should_speak(user["history"]):
         topic = generate_topic()
 
         user["history"].append(topic)
-        mem["users"][uid] = user
-        save(mem)
+        memory["users"][user_id] = user
+        save(memory)
 
         return jsonify({
             "result": topic,
             "audio": tts(topic)
         })
 
-    # 👁️ awareness
-    events = get_recent_events(mem)
-
-    system_prompt = f"""
-{personality_prompt(user, uid)}
-
-Recent Events:
-{events}
-
-You are aware of server activity
-"""
+    # 🧠 السياق
+    system_prompt = personality_prompt(user, user_id)
 
     content = text
     if image:
-        content += f"\nImage:{image}"
+        content += f"\nImage: {image}"
 
-    final = ask([
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": content}
-    ])
+    # 📄 ملف طويل
+    if file:
+        parts = [file[i:i+2000] for i in range(0, len(file), 2000)]
+        responses = []
+
+        for part in parts:
+            responses.append(ask([
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": part}
+            ]))
+
+        final = "\n".join(responses)
+    else:
+        final = ask([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": content}
+        ])
 
     # 💾 حفظ
     user["history"].append(final)
-    mem["users"][uid] = user
-    save(mem)
+    memory["users"][user_id] = user
+    store_event(memory, text)
+    save(memory)
+
+    # 🎧 صوت
+    audio_file = tts(final)
 
     return jsonify({
         "result": final,
-        "audio": tts(final)
+        "audio": audio_file
     })
 
 app.run(host="0.0.0.0", port=3000)
